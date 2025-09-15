@@ -1,0 +1,5 @@
+.env
+automation_results_*.json
+logs/
+*.log
+__pycache__/
