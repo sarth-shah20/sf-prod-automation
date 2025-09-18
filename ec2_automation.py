@@ -17,9 +17,28 @@ INSTANCE_PROFILE_NAME = "EC2-SSM-S3-Profile"
 
 # Scientiflow token from environment
 SCIENTIFLOW_TOKEN = os.getenv("SCIENTIFLOW_TOKEN_CONTENT")
+FIRST_JOB_FLAG= os.getenv("FIRST_JOB_FLAG")
+EXTEND_JOB_FLAG= os.getenv("EXTEND_JOB_FLAG")
+INPUT_S3_PROJECT_PATH = os.getenv("INPUT_S3_PROJECT_PATH")
+USER_ID = os.getenv("USER_ID")
+PROJECT_TITLE = os.getenv("PROJECT_TITLE")
+JOB_TITLE = os.getenv("JOB_TITLE")
+JOB_ID = os.getenv("JOB_ID")
 
 if not SCIENTIFLOW_TOKEN:
     raise ValueError("SCIENTIFLOW_TOKEN_CONTENT not found in environment variables")
+if not FIRST_JOB_FLAG:
+    raise ValueError("FIRST_JOB_FLAG not found in environment variables")
+if not EXTEND_JOB_FLAG:
+    raise ValueError("EXTEND_JOB_FLAG not found in environment variables")
+if not INPUT_S3_PROJECT_PATH:
+    raise ValueError("INPUT_S3_PROJECT_PATH not found in environment variables")
+if not USER_ID:
+    raise ValueError("USER_ID not found in environment variables")
+if not PROJECT_TITLE:
+    raise ValueError("PROJECT_TITLE not found in environment variables")
+if not JOB_TITLE:
+    raise ValueError("JOB_TITLE not found in environment variables")
 
 # AWS clients
 ec2 = boto3.resource("ec2", region_name=REGION)
@@ -58,6 +77,16 @@ class ScientifowAutomation:
                 SubnetId=SUBNET_ID,
                 IamInstanceProfile={"Name": INSTANCE_PROFILE_NAME},
                 UserData=user_data_script,
+                BlockDeviceMappings=[
+                    {
+                        'DeviceName': '/dev/sda1',  # or /dev/xvda depending on AMI
+                        'Ebs': {
+                            'VolumeSize': 20,  # GB - increase as needed
+                            'VolumeType': 'gp3',
+                            'DeleteOnTermination': True
+                        }
+                    }
+                ],
                 TagSpecifications=[
                     {
                         'ResourceType': 'instance',
@@ -208,7 +237,9 @@ class ScientifowAutomation:
         return False, "", ""
     
     def run_scientiflow_workflow(self):
-        """Run the main Scientiflow workflow."""
+        """Run the main Scientiflow workflow as a single command."""
+        
+        # Build the complete command as a single script
         commands = [
             "#!/bin/bash",
             "set -e",  # Exit on any error
@@ -217,9 +248,22 @@ class ScientifowAutomation:
             "",
             "# Set environment variables",
             f"export SCIENTIFLOW_TOKEN=\"{SCIENTIFLOW_TOKEN}\"",
-            "echo \"$SCIENTIFLOW_TOKEN\"",
-            f"echo \"{SCIENTIFLOW_TOKEN}\"",
+            f"export FIRST_JOB_FLAG=\"{FIRST_JOB_FLAG}\"",
+            f"export EXTEND_JOB_FLAG=\"{EXTEND_JOB_FLAG}\"",
+            f"export INPUT_S3_PROJECT_PATH=\"{INPUT_S3_PROJECT_PATH}\"",
+            f"export USER_ID=\"{USER_ID}\"",
+            f"export PROJECT_TITLE=\"{PROJECT_TITLE}\"",
+            f"export JOB_TITLE=\"{JOB_TITLE}\"",
+            f"export JOB_ID=\"{JOB_ID}\"",
             "export PATH='/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:/root/.local/bin:/usr/local/singularity/bin:$PATH'",
+            "",
+            "echo \"Environment variables set:\"",
+            "echo \"  FIRST_JOB_FLAG: $FIRST_JOB_FLAG\"",
+            "echo \"  EXTEND_JOB_FLAG: $EXTEND_JOB_FLAG\"",
+            "echo \"  USER_ID: $USER_ID\"",
+            "echo \"  PROJECT_TITLE: $PROJECT_TITLE\"",
+            "echo \"  JOB_TITLE: $JOB_TITLE\"",
+            "echo \"  JOB_ID: $JOB_ID\"",
             "",
             "# Create working directory",
             "WORK_DIR='/root/scientiflow-work'",
@@ -251,18 +295,70 @@ class ScientifowAutomation:
             "    echo '⚠️  List jobs command had issues, but continuing...'",
             "}",
             "",
+            "# Handle job extension if needed",
+            "if [ \"$EXTEND_JOB_FLAG\" = \"true\" ]; then", #FIRST_JOB_FLAG =false, thus pulling from s3
+            "    echo '🔄 EXTEND_JOB_FLAG=true: Pulling entire job directory from S3...'",
+            "    ",
+            "    if [ -z \"$INPUT_S3_PROJECT_PATH\" ]; then",
+            "        echo '❌ Error: INPUT_S3_PROJECT_PATH is required when EXTEND_JOB_FLAG=true.'",
+            "        exit 1",
+            "    fi",
+            "    ",
+            "    S3_JOB_SOURCE=\"${INPUT_S3_PROJECT_PATH}/${USER_ID}/${PROJECT_TITLE}/${JOB_TITLE}/\"",
+            "    LOCAL_PROJECT_DIR=\"${PROJECT_TITLE}\"",
+            "    ",
+            "    echo \"📥 Downloading job directory from S3: $S3_JOB_SOURCE to $LOCAL_PROJECT_DIR\"",
+            "    mkdir -p \"$LOCAL_PROJECT_DIR\"",
+            "    ",
+            "    aws s3 sync \"${S3_JOB_SOURCE}\" \"${LOCAL_PROJECT_DIR}/\" --delete || {",
+            "        echo '❌ Failed to sync from S3'",
+            "        exit 1",
+            "    }",
+            "    ",
+            "    echo '✅ Job directory downloaded from S3.'",
+            "    ls -la \"$LOCAL_PROJECT_DIR\"",
+            "else",
+            "    echo '⏭️  EXTEND_JOB_FLAG=false: Skipping S3 download'", # FIRST_JOB_FLAG =true, thus skipping s3 pull
+            "fi",
+            "",
+            "# Execute workflow jobs",
+            "echo '🚀 Executing workflow jobs...'",
+            "if [ -n \"$JOB_ID\" ]; then",
+            "    echo \"Executing job ID: $JOB_ID\"",
+            "    scientiflow-cli --execute-jobs \"$JOB_ID\" || {",
+            "        echo '❌ Workflow execution failed'",
+            "        exit 1",
+            "    }",
+            "    echo '✅ Workflow execution completed successfully'",
+            "else",
+            "    echo '⚠️  No JOB_ID specified, skipping job execution'",
+            "fi",
+            "",
             "# Create output directory and summary",
             "mkdir -p output",
             "echo 'Scientiflow automation completed at $(date)' > output/summary.txt",
             "echo 'Hostname: $(hostname)' >> output/summary.txt",
             "echo 'Working directory: $(pwd)' >> output/summary.txt",
+            "echo 'Job ID: $JOB_ID' >> output/summary.txt",
+            "echo 'Project: $PROJECT_TITLE' >> output/summary.txt",
+            "echo 'User: $USER_ID' >> output/summary.txt",
             "",
-            "echo '=== Scientiflow Workflow Completed ==='",
+            "# List final directory contents",
+            "echo '📁 Final directory contents:'",
+            "ls -la",
+            "",
+            "if [ -d \"output\" ]; then",
+            "    echo '📁 Output directory contents:'",
+            "    ls -la output/",
+            "fi",
+            "",
+            "echo '=== Scientiflow Workflow Completed Successfully ==='",
         ]
         
-        command_id = self.send_command(commands, "Scientiflow Workflow", 600)
+        # Send as single command with extended timeout
+        command_id = self.send_command(commands, "Complete Scientiflow Workflow", 1800)  # 30 minutes
         if command_id:
-            return self.monitor_command(command_id, "Scientiflow Workflow")
+            return self.monitor_command(command_id, "Complete Scientiflow Workflow")
         return False, "", ""
     
     def upload_results_to_s3(self):
