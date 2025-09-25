@@ -237,7 +237,7 @@ class ScientifowAutomation:
         return False, "", ""
     
     def run_scientiflow_workflow(self):
-        """Run the main Scientiflow workflow as a single command."""
+        """Run the main Scientiflow workflow."""
         
         # Build the complete command as a single script
         commands = [
@@ -296,8 +296,8 @@ class ScientifowAutomation:
             "}",
             "",
             "# Handle job extension if needed",
-            "if [ \"$EXTEND_JOB_FLAG\" = \"true\" ]; then", #FIRST_JOB_FLAG =false, thus pulling from s3
-            "    echo '🔄 EXTEND_JOB_FLAG=true: Pulling entire job directory from S3...'",
+            "if [ \"$FIRST_JOB_FLAG\" = \"false\" ]; then", #FIRST_JOB_FLAG =false, thus pulling from s3
+            "    echo '🔄 FIRST_JOB_FLAG=false: Pulling entire job directory from S3...'",
             "    ",
             "    if [ -z \"$INPUT_S3_PROJECT_PATH\" ]; then",
             "        echo '❌ Error: INPUT_S3_PROJECT_PATH is required when EXTEND_JOB_FLAG=true.'",
@@ -318,7 +318,7 @@ class ScientifowAutomation:
             "    echo '✅ Job directory downloaded from S3.'",
             "    ls -la \"$LOCAL_PROJECT_DIR\"",
             "else",
-            "    echo '⏭️  EXTEND_JOB_FLAG=false: Skipping S3 download'", # FIRST_JOB_FLAG =true, thus skipping s3 pull
+            "    echo '⏭️  FIRST_JOB_FLAG=true: Skipping S3 download'", # FIRST_JOB_FLAG =true, thus skipping s3 pull
             "fi",
             "",
             "# Execute workflow jobs",
